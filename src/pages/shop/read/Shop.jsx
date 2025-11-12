@@ -5,11 +5,22 @@ import ShopReview from "./review/ShopReview";
 import ShopRelated from "./ShopRelated";
 import { useNavigate, useParams } from "react-router-dom";
 import { useModal } from "../../../components/modal/useModal";
+import { useSelector } from "react-redux";
+import { title } from "../../../styles/common";
+import { useSelector } from "react-redux";
+import { title } from "../../../styles/common";
 
 const formatPrice = (type, value) => {
   const n = Number(value) || 0;
   return `${n.toLocaleString()}${type === "CANDY" ? "캔디" : "원"}`;
 };
+
+//배송비 계산
+  const calculateShippingFee = (purchaseType, itemTotal) => {
+    if(purchaseType !== "CASH") return 0;
+    return itemTotal >= 30000 ? 0 : 3000;
+  };
+
 
 const parseSubs = (s) =>
   typeof s === "string" ? s.split(",").map((v) => v.trim()).filter(Boolean) : [];
@@ -18,6 +29,7 @@ const Shop = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const { openModal } = useModal();
+  const { currentUser, isLogin } = useSelector((state) => state.user);
 
   const [headerData, setHeaderData] = useState(null); // 상품 상단 헤더
   const [reviewStats, setReviewStats] = useState(null); // "리뷰 평점"
@@ -31,13 +43,29 @@ const Shop = () => {
   const [selectedImage, setSelectedImage] = useState(null);
   const [goCart, setGoCart] = useState([]);
 
-  const totalText = useMemo(() => {
-    if (!headerData) return "";
-
-    const price = Number(headerData.productPrice) || 0;
-    const purchaseType = headerData.productPurchaseType || "CASH";
-    return formatPrice(purchaseType, price * count);
+  const itemTotal = useMemo(() => {
+    const price = Number(headerData?.productPrice) || 0;
+    return price * count;
   }, [headerData, count]);
+
+  const shippingFee = useMemo(() => {
+    const purchaseType = headerData?.productPurchaseType || "CASH";
+    return calculateShippingFee(purchaseType, itemTotal);
+  }, [headerData, itemTotal]);
+
+  const totalAmount = useMemo(() => {
+    return itemTotal + shippingFee;
+  }, [headerData, itemTotal]);
+
+  const totalText = useMemo(() => {
+    // if (!headerData) return "";
+    const purchaseType = headerData?.productPurchaseType || "CASH";
+    return formatPrice(purchaseType, totalAmount);
+  }, [totalAmount, headerData]);
+
+
+
+  
 
   // useEffect 1개로 2개 fetch 날리기
   useEffect(() => {
@@ -106,8 +134,17 @@ const Shop = () => {
   };
 
   const handleAddToCart = async () => {
+     if(!isLogin || !currentUser) {
+      return openModal({
+            title: "로그인 필요",
+            message: "구매를 진행하려면 로그인해야 합니다.",
+            confirmText: "로그인",
+            onConfirm: () => navigate("/login"),
+        });
+    }
+
     const itemData = {
-      memberId: 11, // ✅ 실제 로그인 유저 ID로 교체 예정
+      memberId: currentUser.id, 
       productId: id,
       quantity: count,
     };
@@ -161,6 +198,54 @@ const Shop = () => {
   const subImages = parseSubs(productSubImageUrl);
   const isNew = String(productType || "").includes("NEW");
   const isBest = String(productType || "").includes("BEST");
+
+  const handlePurchase = async () => {
+    if(!isLogin || !currentUser) {
+      return openModal({
+            title: "로그인 필요",
+            message: "구매를 진행하려면 로그인해야 합니다.",
+            confirmText: "로그인",
+            onConfirm: () => navigate("/login"),
+        });
+    }
+
+    const price = Number(productPrice) || 0;
+    const finalTotalPrice = totalAmount;
+
+    const orderData = {
+      memberId : currentUser.id,
+      productId : id,
+      quantity : count,
+      totalPrice : finalTotalPrice,
+    };
+
+    try {
+      const url = `${process.env.REACT_APP_BACKEND_URL}/order/single`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {'Content-Type' : 'application/json'},
+        body: JSON.stringify(orderData),
+      });
+
+      if(!res.ok) {
+        throw new Error("단일 상품 주문 생성 실패");
+
+      }
+      const result = await res.json();
+      const createdOrderId = result.data;
+
+      if(!createdOrderId) {
+        throw new Error("주문 ID를 받지 못했습니다.");
+      }
+
+      navigate(`/main/shop/order?orderId=${createdOrderId}`);
+    }catch (error) {
+      openModal({
+        title: "주문 실패",
+        message : error.message || "주문 생성 중 오류 발생"
+      });
+    }
+  }
 
   return (
     <S.Page>
@@ -235,7 +320,7 @@ const Shop = () => {
               <S.DeliveryRow>
                 <S.Delivery>배송</S.Delivery>
                 <S.Divider />
-                <S.DeliveryCharge>3,000원</S.DeliveryCharge>
+                <S.DeliveryCharge>{shippingFee.toLocaleString()}원</S.DeliveryCharge>
               </S.DeliveryRow>
               <S.DeliveryInfo>30,000원 이상 결제 시 무료</S.DeliveryInfo>
             </>
@@ -290,7 +375,7 @@ const Shop = () => {
 
             <S.CartButton onClick={handleAddToCart}>장바구니</S.CartButton>
 
-            <S.PurchaseButton onClick={() => navigate("/main/shop/order")}>
+            <S.PurchaseButton onClick={handlePurchase}>
               구매하기
             </S.PurchaseButton>
           </S.ButtonRow>
